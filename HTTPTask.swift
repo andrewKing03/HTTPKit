@@ -37,10 +37,14 @@ class HTTPTask: NSObject {
             if !self.requestSerializer {
                 self.requestSerializer = HTTPRequestSerializer()
             }
-            var request = self.requestSerializer.createRequest(NSURL.URLWithString(self.url),
+            var serialReq = self.requestSerializer.createRequest(NSURL.URLWithString(self.url),
                 method: self.method, parameters: parameters)
+            if serialReq.error {
+                failure(serialReq.error!)
+                return
+            }
             var session = NSURLSession.sharedSession()
-            var task = session.dataTaskWithRequest(request,
+            var task = session.dataTaskWithRequest(serialReq.request,
                 completionHandler: {(data: NSData!, response: NSURLResponse!, error: NSError!) -> Void in
                 if error {
                     failure(error)

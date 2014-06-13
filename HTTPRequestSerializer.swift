@@ -19,7 +19,7 @@ extension String {
 }
 
 class HTTPRequestSerializer: NSObject {
-    
+    var headers = Dictionary<String,String>()
     var stringEncoding = NSUTF8StringEncoding
     var allowsCellularAccess = true
     var HTTPShouldHandleCookies = true
@@ -32,17 +32,22 @@ class HTTPRequestSerializer: NSObject {
     init() {
         super.init()
     }
-    
-    ///creates a request from the url, HTTPMethod, and parameters
-    func createRequest(url: NSURL, method: HTTPMethod, parameters: Dictionary<String,AnyObject>?) -> NSURLRequest {
+    func newRequest(url: NSURL, method: HTTPMethod) -> NSMutableURLRequest {
         var request = NSMutableURLRequest(URL: url, cachePolicy: cachePolicy, timeoutInterval: timeoutInterval)
         request.HTTPMethod = method.toRaw()
         request.allowsCellularAccess = self.allowsCellularAccess
         request.HTTPShouldHandleCookies = self.HTTPShouldHandleCookies
         request.HTTPShouldHandleCookies = self.HTTPShouldUsePipelining
         request.networkServiceType = self.networkServiceType
-        //add headers
+        for (key,val) in self.headers {
+            request.addValue(val, forHTTPHeaderField: key)
+        }
+        return request
+    }
+    ///creates a request from the url, HTTPMethod, and parameters
+    func createRequest(url: NSURL, method: HTTPMethod, parameters: Dictionary<String,AnyObject>?) -> (request: NSURLRequest, error: NSError?) {
         
+        var request = newRequest(url, method: method)
         var isMultiForm = false
         //do a check for upload objects to see if we are multi form
         if let params = parameters {
@@ -57,8 +62,10 @@ class HTTPRequestSerializer: NSObject {
             if(method != HTTPMethod.POST || method != HTTPMethod.PUT) {
                 request.HTTPMethod = HTTPMethod.POST.toRaw() // you probably wanted a post
             }
-            //do multi form encoding..
-            return request
+            if parameters {
+                request.HTTPBody = dataFromParameters(parameters!)
+            }
+            return (request,nil)
         }
         var queryString = ""
         if parameters {
@@ -74,25 +81,16 @@ class HTTPRequestSerializer: NSObject {
                 request.setValue("application/x-www-form-urlencoded; charset=\(charset)",
                     forHTTPHeaderField:contentTypeKey)
             }
-            request.HTTPBody = queryString.dataUsingEncoding(self.stringEncoding, allowLossyConversion: false)
+            request.HTTPBody = queryString.dataUsingEncoding(self.stringEncoding)
         }
-        return request
+        return (request,nil)
     }
     
     ///convert the parameter dict to its HTTP string representation
     func stringFromParameters(parameters: Dictionary<String,AnyObject>) -> String {
-        var pairs = serializeObject(parameters, key: nil)
-        //join the pairs
-        var str = ""
-        var index = 0
-        for pair in pairs {
-            str += pair.stringValue()
-            if index < pairs.count-1 {
-                str += "&"
-            }
-            index++
-        }
-        return str
+        return join("&", map(serializeObject(parameters, key: nil), {(pair) in
+            return pair.stringValue()
+            }))
     }
     ///check if enum is a HTTPMethod that requires the params in the URL
     func isURIParam(method: HTTPMethod) -> Bool {
@@ -114,7 +112,7 @@ class HTTPRequestSerializer: NSObject {
                 collect.extend(self.serializeObject(nestedObject,key: newKey))
             }
         } else {
-            collect.append(HTTPPair.Pair(object, key: key))
+            collect.append(HTTPPair(value: object, key: key))
         }
         return collect
     }
@@ -130,31 +128,81 @@ class HTTPRequestSerializer: NSObject {
                 notFiles[key] = object
             }
         }
-        //add inital boundary
-        //add files
-        //add parameters
-        //add closing boundary
-        //done!
+        var multiCRLF = "\r\n"
+        var boundary = "Boundary+\(arc4random())\(arc4random())"
+        var boundSplit = "\(multiCRLF)--\(boundary)\(multiCRLF)"
+        mutData.appendData("--\(boundary)\(multiCRLF)".dataUsingEncoding(self.stringEncoding))
+
+        for (key,upload) in files {
+            mutData.appendData(multiFormHeader(key, fileName: upload.fileName,
+                type: upload.mimeType, multiCRLF: multiCRLF).dataUsingEncoding(self.stringEncoding))
+            mutData.appendData(upload.data)
+            mutData.appendData(boundSplit.dataUsingEncoding(self.stringEncoding))
+        }
+        let paramStr = join(boundSplit, map(serializeObject(notFiles, key: nil), {(pair) in
+            return "\(self.multiFormHeader(pair.key, fileName: nil, type: nil, multiCRLF: multiCRLF))\(pair.getValue())"
+            }))
+        mutData.appendData(paramStr.dataUsingEncoding(self.stringEncoding))
+        mutData.appendData("\(multiCRLF)--\(boundary)--\(multiCRLF)".dataUsingEncoding(self.stringEncoding))
         return mutData
+    }
+    ///helper method to create the multi form headers
+    func multiFormHeader(name: String, fileName: String?, type: String?, multiCRLF: String) -> String {
+        var str = "Content-Disposition: form-data; name=\"\(name.escapeStr())\""
+        if fileName {
+            str += "; filename=\"\(fileName)\""
+        }
+        str += multiCRLF
+        if type {
+            str += "Content-Type: \"\(type)\"\(multiCRLF)"
+        }
+        str += multiCRLF
+        return str
     }
     ///Local class to create key/pair of the parameters
     class HTTPPair: NSObject {
-        var value: AnyObject!
+        var value: AnyObject
         var key: String!
         
-        func stringValue() -> String {
-            if !self.key {
-                return value.description!.escapeStr()
+        init(value: AnyObject, key: String?) {
+            self.value = value
+            self.key = key
+        }
+        func getValue() -> String {
+            var val = ""
+            if let str = self.value as? String {
+                val = str
+            } else if self.value.description {
+                val = self.value.description
             }
-            return "\(self.key.escapeStr())=\(self.value.description!.escapeStr())"
+            return val
+        }
+        func stringValue() -> String {
+            var val = getValue()
+            if !self.key {
+                return val.escapeStr()
+            }
+            return "\(self.key.escapeStr())=\(val.escapeStr())"
         }
         
-        class func Pair(value: AnyObject, key: String?) -> HTTPPair {
-            var pair = HTTPPair()
-            pair.value = value
-            pair.key = key
-            return pair
-        }
     }
    
+}
+
+class JSONRequestSerializer: HTTPRequestSerializer {
+    
+    override func createRequest(url: NSURL, method: HTTPMethod, parameters: Dictionary<String,AnyObject>?) -> (request: NSURLRequest, error: NSError?) {
+        if self.isURIParam(method) {
+            return super.createRequest(url, method: method, parameters: parameters)
+        }
+        var request = newRequest(url, method: method)
+        var error: NSError?
+        if parameters {
+            var charset = CFStringConvertEncodingToIANACharSetName(CFStringConvertNSStringEncodingToEncoding(NSUTF8StringEncoding));
+            request.setValue(charset, forHTTPHeaderField: self.contentTypeKey)
+            request.HTTPBody = NSJSONSerialization.dataWithJSONObject(parameters, options: NSJSONWritingOptions(), error:&error)
+        }
+        return (request, error!)
+    }
+    
 }
