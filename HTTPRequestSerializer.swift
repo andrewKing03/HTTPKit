@@ -132,17 +132,26 @@ class HTTPRequestSerializer: NSObject {
         var boundary = "Boundary+\(arc4random())\(arc4random())"
         var boundSplit = "\(multiCRLF)--\(boundary)\(multiCRLF)"
         mutData.appendData("--\(boundary)\(multiCRLF)".dataUsingEncoding(self.stringEncoding))
-
+        var noParams = false
+        if notFiles.count == 0 {
+            noParams = true
+        }
+        var i = files.count
         for (key,upload) in files {
             mutData.appendData(multiFormHeader(key, fileName: upload.fileName,
                 type: upload.mimeType, multiCRLF: multiCRLF).dataUsingEncoding(self.stringEncoding))
             mutData.appendData(upload.data)
-            mutData.appendData(boundSplit.dataUsingEncoding(self.stringEncoding))
+            if i == 1 && noParams {
+            } else {
+                mutData.appendData(boundSplit.dataUsingEncoding(self.stringEncoding))
+            }
         }
-        let paramStr = join(boundSplit, map(serializeObject(notFiles, key: nil), {(pair) in
-            return "\(self.multiFormHeader(pair.key, fileName: nil, type: nil, multiCRLF: multiCRLF))\(pair.getValue())"
-            }))
-        mutData.appendData(paramStr.dataUsingEncoding(self.stringEncoding))
+        if !noParams {
+            let paramStr = join(boundSplit, map(serializeObject(notFiles, key: nil), {(pair) in
+                return "\(self.multiFormHeader(pair.key, fileName: nil, type: nil, multiCRLF: multiCRLF))\(pair.getValue())"
+                }))
+            mutData.appendData(paramStr.dataUsingEncoding(self.stringEncoding))
+        }
         mutData.appendData("\(multiCRLF)--\(boundary)--\(multiCRLF)".dataUsingEncoding(self.stringEncoding))
         return mutData
     }
