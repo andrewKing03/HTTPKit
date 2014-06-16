@@ -22,7 +22,7 @@ class HTTPTask: NSObject {
     var method: HTTPMethod = HTTPMethod.GET
     var url: String?
     var requestSerializer: HTTPRequestSerializer!
-    var responseSerializer: AnyObject?
+    var responseSerializer: HTTPResponseSerializer?
     /**Create a newly initalized object */
     init() {
         super.init()
@@ -33,26 +33,36 @@ class HTTPTask: NSObject {
     /**run/start the HTTP task */
     func run(parameters: Dictionary<String,AnyObject>!, success:((AnyObject?) -> Void)!, failure:((NSError) -> Void)!) {
         if self.url {
-            //serialize the parameters if needed
+            
             if !self.requestSerializer {
                 self.requestSerializer = HTTPRequestSerializer()
             }
-            var serialReq = self.requestSerializer.createRequest(NSURL.URLWithString(self.url),
+            let serialReq = self.requestSerializer.createRequest(NSURL.URLWithString(self.url),
                 method: self.method, parameters: parameters)
             if serialReq.error {
                 failure(serialReq.error!)
                 return
             }
-            var session = NSURLSession.sharedSession()
-            var task = session.dataTaskWithRequest(serialReq.request,
+            let session = NSURLSession.sharedSession()
+            let task = session.dataTaskWithRequest(serialReq.request,
                 completionHandler: {(data: NSData!, response: NSURLResponse!, error: NSError!) -> Void in
                 if error {
                     failure(error)
                     return
                 }
                 if data {
-                    //serialize the response if needed
-                    success(data)
+                    var responseObject: AnyObject = data
+                    if self.responseSerializer {
+                        let resObj = self.responseSerializer!.responseObjectFromResponse(response, data: data)
+                        if resObj.error {
+                            failure(resObj.error!)
+                            return
+                        }
+                        if resObj.object {
+                            responseObject = resObj.object!
+                        }
+                    }
+                    success(responseObject)
                 } else {
                     failure(error)
                 }
